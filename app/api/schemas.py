@@ -8,6 +8,7 @@ from pydantic import BaseModel
 class PredictiveModel(BaseModel):
     """Model for predictive model"""
     b64_encoded_model: str
+    pred_model_size: int
 
 class PredictionRequest(BaseModel):
     """Request body for prediction endpoint"""

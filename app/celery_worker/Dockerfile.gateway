@@ -1,0 +1,10 @@
+FROM python:3.10
+
+# requirements for celery_worker are installed
+COPY ./gateway_requirements.txt /tmp/requirements.txt
+RUN pip3 install --upgrade pip
+RUN pip install -r /tmp/requirements.txt
+
+# run celery_worker
+WORKDIR /app
+CMD celery -A app.celery_worker.celery worker --loglevel=info

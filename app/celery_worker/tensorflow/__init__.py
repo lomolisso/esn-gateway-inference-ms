@@ -14,10 +14,10 @@ class PredictiveModelHandler(metaclass=SingletonMeta):
 
     def load_model(self, b64_encoded_model):
         if USE_TFLITE:
-            from app.tensorflow.lite.handler import TFLiteHandler
+            from app.celery_worker.tensorflow.lite.handler import TFLiteHandler
             self._handler = TFLiteHandler()
         else:
-            from app.tensorflow.keras.handler import TFKerasHandler
+            from app.celery_worker.tensorflow.keras.handler import TFKerasHandler
             self._handler = TFKerasHandler()
         self._handler.load_model(b64_encoded_model)
     

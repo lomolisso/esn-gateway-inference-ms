@@ -12,10 +12,8 @@ class PredictiveModel(BaseModel):
 
 class PredictionRequest(BaseModel):
     """Request body for prediction endpoint"""
+    device_name: str
+    debug_mode: bool
+    request_timestamp: str
     measurement: float
-
-class PredictionResponse(BaseModel):
-    """Response body for prediction endpoint"""
-    measurement: float
-    prediction: float
 

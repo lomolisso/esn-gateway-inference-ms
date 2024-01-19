@@ -5,9 +5,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SECRET_KEY: str = os.environ.get("SECRET_KEY")
-ESN_API_URL = os.environ.get("ESN_API_URL")
+ESN_API_URL : str = os.environ.get("ESN_API_URL")
 USE_TFLITE: bool = os.environ.get("USE_TFLITE", "True") == "True"
 
+ESN_REDIS_URL : str = os.environ.get("ESN_REDIS_URL")
+CELERY_BROKER_URL: str = os.environ.get("CELERY_BROKER_URL")
 
 # CORS
 ORIGINS: list = [

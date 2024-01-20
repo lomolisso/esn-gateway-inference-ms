@@ -9,7 +9,7 @@ broker: redis
 
 from app.celery_worker import celery
 from app.celery_worker.tensorflow import PredictiveModelHandler
-from app.config import USE_TFLITE
+from app.config import IS_GATEWAY
 from app.celery_worker import utils
 
 
@@ -23,14 +23,14 @@ def load_model_task(b64_encoded_model: str):
 
 
 @celery.task(name="predict_task", ignore_result=True)
-def predict_task(device_name: str, request_timestamp: str, measurement: float, debug_mode: bool):
+def predict_task(device_name: str, gateway_name: str, request_timestamp: str, measurement: float, debug_mode: bool):
     """
     celery task for prediction
     """
     model_handler = PredictiveModelHandler()
     prediction = float(model_handler.predict(measurement)[0])
     utils.check_prediction(measurement=measurement, prediction=prediction)
-    prediction_source_layer = "gateway" if USE_TFLITE else "cloud"
+    prediction_source_layer = "gateway" if IS_GATEWAY else "cloud"
     
     if debug_mode:
         payload = {
@@ -42,6 +42,7 @@ def predict_task(device_name: str, request_timestamp: str, measurement: float, d
         
         utils.prediction_command(
             device_name=device_name,
+            gateway_name=gateway_name,
             payload=payload
         )
     

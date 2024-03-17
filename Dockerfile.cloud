@@ -7,5 +7,5 @@ RUN pip install -r /tmp/requirements.txt
 
 # run backend app
 WORKDIR /app
-EXPOSE 8014
-CMD uvicorn app.main:app --host 0.0.0.0 --port 8014 --reload
+EXPOSE 8011
+CMD uvicorn app.main:app --host 0.0.0.0 --port 8011 --reload

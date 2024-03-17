@@ -3,11 +3,11 @@ import json
 import aioredis
 import requests
 
-from app.config import ESN_REDIS_URL, IS_GATEWAY, ESN_CLOUD_APP_BACKEND_URL
+from app.config import ESN_REDIS_URL, IS_GATEWAY, ESN_API_URL
 
 def _post_json_to_cloud_app_backend(endpoint, payload):
     response = requests.post(
-        f"{ESN_CLOUD_APP_BACKEND_URL}/{endpoint}",
+        f"{ESN_API_URL}/{endpoint}",
         json=payload,
     )
     if response.status_code != 200:

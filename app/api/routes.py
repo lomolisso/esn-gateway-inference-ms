@@ -9,6 +9,7 @@ from app import utils
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+counter = 0
 
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB_HISTORY)
 
@@ -47,6 +48,8 @@ async def prediction_request(prediction_request: schemas.PredictionRequestExport
     is then submitted to a specialized queue "prediction_queue" for processing.
     """
 
+    counter += 1
+    print(f"Prediction request received: {counter}")
     compute_prediction_task.apply_async(
         kwargs={"request": prediction_request.model_dump()},
         queue="prediction_queue"
@@ -84,6 +87,8 @@ async def prediction_result(task_result: schemas.CeleryTaskResult):
 
     if heuristic_result != GATEWAY_INFERENCE_LAYER:
         layers = {0: "SENSOR_INFERENCE_LAYER", 1: "GATEWAY_INFERENCE_LAYER", 2: "CLOUD_INFERENCE_LAYER", -1: "ERROR"}
+        if heuristic_result is None:
+            print("ERROR: Heuristic returned None")
         print(f"{sensor_name} inference layer transitioned to {layers[heuristic_result]}")
         utils.clear_prediction_history(redis_client, gateway_name, sensor_name)
 

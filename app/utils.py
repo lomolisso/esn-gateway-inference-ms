@@ -55,21 +55,32 @@ def gateway_adaptive_heuristic(redis_client: redis.Redis, gateway_name: str, sen
 
     if q >= MAX_INFERENCE_QUEUE_SIZE:
         # set inference layer to cloud
+        print("Inference queue is full. Setting inference layer to cloud.")
         return CLOUD_INFERENCE_LAYER
     else: # q < MAX_INFERENCE_QUEUE_SIZE
         if t < k:
+            print("Prediction history length is less than the max length. Setting inference layer to gateway.")
             return GATEWAY_INFERENCE_LAYER
         elif t == k:
+            print("Prediction history length is equal to the max length...")
             if n == phi_n:
                 # set inference layer to cloud
+                print("Number of abnormal predictions is equal to the threshold. Setting inference layer to cloud.")
                 return CLOUD_INFERENCE_LAYER
             else: # 0 <= n < phi_n
                 if n == 0:
+                    print("Number of abnormal predictions is zero...")
                     if low_battery:
                         # maintain inference layer as gateway
+                        print("Low battery detected. Maintaining inference layer as gateway.")  
                         return GATEWAY_INFERENCE_LAYER
                     else:
                         # set inference layer to sensor
+                        print("No low battery detected. Setting inference layer to sensor.")
                         return SENSOR_INFERENCE_LAYER
+                else: # 0 < n < phi_n
+                    # set inference layer to cloud
+                    print("Number of abnormal predictions is between zero and the threshold. Setting inference layer to gateway.")
+                    return GATEWAY_INFERENCE_LAYER
         else:
             raise ValueError(f"Invalid history length: {t}")

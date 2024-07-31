@@ -9,8 +9,6 @@ from app import utils
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-counter = 0
-
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB_HISTORY)
 
 # --- Inference endpoints ---
@@ -48,8 +46,7 @@ async def prediction_request(prediction_request: schemas.PredictionRequestExport
     is then submitted to a specialized queue "prediction_queue" for processing.
     """
 
-    counter += 1
-    print(f"Prediction request received: {counter}")
+    print(f"Received prediction request")
     compute_prediction_task.apply_async(
         kwargs={"request": prediction_request.model_dump()},
         queue="prediction_queue"

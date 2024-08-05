@@ -32,7 +32,7 @@ def gateway_adaptive_heuristic(redis_client: redis.Redis, gateway_name: str, sen
     """
     
     prediction_history = _update_prediction_history(redis_client, gateway_name, sensor_name, prediction)
- 
+
     t = len(prediction_history)
     k = MAX_PREDICTION_HISTORY_LENGTH
     n = sum(prediction_history)
@@ -51,7 +51,6 @@ def gateway_adaptive_heuristic(redis_client: redis.Redis, gateway_name: str, sen
     print(f"Current length of inference queue: {q}")
     print(f"Max length of inference queue: {MAX_INFERENCE_QUEUE_SIZE}")
     print("=================================")
-
 
     if q >= MAX_INFERENCE_QUEUE_SIZE:
         # set inference layer to cloud

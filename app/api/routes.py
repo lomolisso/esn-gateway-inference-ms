@@ -73,7 +73,7 @@ async def prediction_result(task_result: schemas.CeleryTaskResult):
     low_battery: bool = prediction_request.low_battery
     prediction: int = prediction_result.prediction
 
-    heuristic_result = utils.gateway_adaptive_heuristic(
+    heuristic_result = utils.gateway_adaptive_inference_heuristic(
         redis_client=redis_client,
         gateway_name=gateway_name,
         sensor_name=sensor_name,
@@ -88,6 +88,7 @@ async def prediction_result(task_result: schemas.CeleryTaskResult):
             print("ERROR: Heuristic returned None")
         print(f"{sensor_name} inference layer transitioned to {layers[heuristic_result]}")
         utils.clear_prediction_history(redis_client, gateway_name, sensor_name)
+        utils.clear_prediction_counter(redis_client, gateway_name, sensor_name)
 
     export_prediction_result = schemas.PredictionResultExport(
         metadata=task_result.metadata,

@@ -1,7 +1,7 @@
 import redis
 from collections import deque
 import json
-from app.core.config import MAX_INFERENCE_QUEUE_SIZE, MAX_PREDICTION_HISTORY_LENGTH, ABNORMAL_LABELS, ABNORMAL_PREDICTION_THRESHOLD, CLOUD_INFERENCE_LAYER, GATEWAY_INFERENCE_LAYER, SENSOR_INFERENCE_LAYER, HEURISTIC_ERROR_CODE, ADAPTIVE_INFERENCE, MAX_INFERENCE_QUEUE_SIZE
+from app.core.config import MAX_INFERENCE_QUEUE_SIZE, PREDICTION_HISTORY_LENGTH, ABNORMAL_LABELS, NORMAL_PREDICTION_THRESHOLD, ABNORMAL_PREDICTION_THRESHOLD, CLOUD_INFERENCE_LAYER, GATEWAY_INFERENCE_LAYER, SENSOR_INFERENCE_LAYER, HEURISTIC_ERROR_CODE, ADAPTIVE_INFERENCE, MAX_INFERENCE_QUEUE_SIZE
 
 def _is_prediction_abnormal(prediction) -> int:
     """
@@ -9,77 +9,105 @@ def _is_prediction_abnormal(prediction) -> int:
     """
     return prediction in ABNORMAL_LABELS
     
-def _update_prediction_history(redis_client: redis.Redis, gateway_name: str, sensor_name: str, prediction: int):
-    is_abnormal: bool = _is_prediction_abnormal(prediction)
+def _get_prediction_counter(redis_client: redis.Redis, gateway_name: str, sensor_name: str):
+    key = f"counter:{gateway_name}:{sensor_name}"
+    _redis_value = redis_client.get(key)
+    prediction_counter = int(_redis_value) if _redis_value else 0
 
+    return prediction_counter
+
+def _set_prediction_counter(redis_client: redis.Redis, gateway_name: str, sensor_name: str, prediction_counter: int):
+    key = f"counter:{gateway_name}:{sensor_name}"
+    redis_client.set(key, prediction_counter)
+
+def update_prediction_counter(redis_client: redis.Redis, gateway_name: str, sensor_name: str):
+    prediction_counter = _get_prediction_counter(redis_client, gateway_name, sensor_name)
+    _set_prediction_counter(redis_client, gateway_name, sensor_name, prediction_counter + 1)
+
+    return prediction_counter
+
+def _get_prediction_history(redis_client: redis.Redis, gateway_name: str, sensor_name: str):
     key = f"history:{gateway_name}:{sensor_name}"
     _redis_value = redis_client.get(key)
-    prediction_history = deque(json.loads(_redis_value), maxlen=MAX_PREDICTION_HISTORY_LENGTH) if _redis_value else deque(maxlen=MAX_PREDICTION_HISTORY_LENGTH)
-    prediction_history.append(1 if is_abnormal else 0)
-    redis_client.set(key, json.dumps(list(prediction_history)))
+    prediction_history = deque(json.loads(_redis_value), maxlen=PREDICTION_HISTORY_LENGTH) if _redis_value else deque(maxlen=PREDICTION_HISTORY_LENGTH)
 
     return prediction_history
 
+def _set_prediction_history(redis_client: redis.Redis, gateway_name: str, sensor_name: str, prediction_history: deque):
+    key = f"history:{gateway_name}:{sensor_name}"
+    redis_client.set(key, json.dumps(list(prediction_history)))
+
+
+def update_prediction_history(redis_client: redis.Redis, gateway_name: str, sensor_name: str, prediction: int):
+    is_abnormal: bool = _is_prediction_abnormal(prediction)
+    prediction_history = _get_prediction_history(redis_client, gateway_name, sensor_name)
+    prediction_history.append(1 if is_abnormal else 0)
+    _set_prediction_history(redis_client, gateway_name, sensor_name, prediction_history)
+
+    return prediction_history
+
+def clear_prediction_counter(redis_client: redis.Redis, gateway_name: str, sensor_name: str):
+    key = f"counter:{gateway_name}:{sensor_name}"
+    redis_client.delete(key)
 
 def clear_prediction_history(redis_client: redis.Redis, gateway_name: str, sensor_name: str):
     key = f"history:{gateway_name}:{sensor_name}"
     redis_client.delete(key)
 
 
-def gateway_adaptive_heuristic(redis_client: redis.Redis, gateway_name: str, sensor_name: str, inf_queue_size: int, low_battery: bool, prediction: int) -> int:
+def gateway_adaptive_inference_heuristic(redis_client: redis.Redis, gateway_name: str, sensor_name: str, inf_queue_size: int, low_battery: bool, prediction: int) -> int:
     """
-    If the heuristic is abnormal, return 1. Otherwise, return 0.
-    """
-    
-    prediction_history = _update_prediction_history(redis_client, gateway_name, sensor_name, prediction)
+    Gateway Adaptive Inference Heuristic
 
-    t = len(prediction_history)
-    k = MAX_PREDICTION_HISTORY_LENGTH
-    n = sum(prediction_history)
-    q = inf_queue_size
-    phi_n = ABNORMAL_PREDICTION_THRESHOLD
+    M_t: prediction history at time step t
+    sigma(M_t): number of abnormal predictions in history at time step t
+    q_t: length of inference queue at time step t
+    psi_q: max length of inference queue
+    phi_g: threshold for normal predictions, if less than phi_g, set inference layer to sensor
+    psi_g: threshold for abnormal predictions, if greater than psi_g, set inference layer to cloud
+    """
+
+    u_t = update_prediction_counter(redis_client, gateway_name, sensor_name)
+    prediction_history = update_prediction_history(redis_client, gateway_name, sensor_name, prediction)
+    assert u_t >= len(prediction_history)
     
+    m = PREDICTION_HISTORY_LENGTH 
+    sigma_M_t = sum(prediction_history)
+
+    q_t = inf_queue_size
+    psi_q = MAX_INFERENCE_QUEUE_SIZE
+
+    phi_g = NORMAL_PREDICTION_THRESHOLD
+    psi_g = ABNORMAL_PREDICTION_THRESHOLD
+
     print("=================================")
     print("GATEWAY ADAPTIVE HEURISTIC PARAMS:")
     print("=================================")
-    print(f"Current length of prediction history: {t}")
-    print(f"Max length of prediction history: {k}")
+    print(f"State counter: {u_t}")
+    print(f"Length of prediction history: {m}")
     print("=================================")
-    print(f"Number of abnormal predictions: {n}")
-    print(f"Threshold for abnormal predictions: {phi_n}")
+    print(f"Current length of inference queue: {q_t}")
+    print(f"Max length of inference queue: {psi_q}")
     print("=================================")
-    print(f"Current length of inference queue: {q}")
-    print(f"Max length of inference queue: {MAX_INFERENCE_QUEUE_SIZE}")
+    print(f"Total abnormal prediction in history: {sigma_M_t}")
+    print(f"Threshold for normal predictions: {phi_g}")
+    print(f"Threshold for abnormal predictions: {psi_g}")
+    print("=================================")
+    print(f"Low battery detected: {low_battery}")
     print("=================================")
 
-    if q >= MAX_INFERENCE_QUEUE_SIZE:
-        # set inference layer to cloud
-        print("Inference queue is full. Setting inference layer to cloud.")
+    if q_t >= psi_q:    #  inference queue is full => cloud
         return CLOUD_INFERENCE_LAYER
-    else: # q < MAX_INFERENCE_QUEUE_SIZE
-        if t < k:
-            print("Prediction history length is less than the max length. Setting inference layer to gateway.")
+    else: # q_t < psi_q
+        if u_t < m: # => M_t is not full
             return GATEWAY_INFERENCE_LAYER
-        elif t == k:
-            print("Prediction history length is equal to the max length...")
-            if n == phi_n:
-                # set inference layer to cloud
-                print("Number of abnormal predictions is equal to the threshold. Setting inference layer to cloud.")
-                return CLOUD_INFERENCE_LAYER
-            else: # 0 <= n < phi_n
-                if n == 0:
-                    print("Number of abnormal predictions is zero...")
-                    if low_battery:
-                        # maintain inference layer as gateway
-                        print("Low battery detected. Maintaining inference layer as gateway.")  
-                        return GATEWAY_INFERENCE_LAYER
-                    else:
-                        # set inference layer to sensor
-                        print("No low battery detected. Setting inference layer to sensor.")
-                        return SENSOR_INFERENCE_LAYER
-                else: # 0 < n < phi_n
-                    # set inference layer to cloud
-                    print("Number of abnormal predictions is between zero and the threshold. Setting inference layer to gateway.")
+        else: # u_t >= m => M_t is full
+            if sigma_M_t < phi_g:
+                if low_battery: # b_t < phi_b
                     return GATEWAY_INFERENCE_LAYER
-        else:
-            raise ValueError(f"Invalid history length: {t}")
+                else: # b_t >= phi_b
+                    return SENSOR_INFERENCE_LAYER
+            elif phi_g <= sigma_M_t and sigma_M_t < psi_g:
+                return GATEWAY_INFERENCE_LAYER
+            else: # sigma_M_t >= psi_g
+                return CLOUD_INFERENCE_LAYER

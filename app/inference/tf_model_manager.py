@@ -1,4 +1,5 @@
 import base64
+import tempfile
 import gzip
 
 class TFModelManager:
@@ -16,8 +17,8 @@ class TFModelManager:
         """
         # Import modules if not already imported
         if self._tf is None:
-            import tensorflow as tf
-            self._tf = tf
+            import tensorflow
+            self._tf = tensorflow
         if self._np is None:
             import numpy 
             self._np = numpy
@@ -34,13 +35,13 @@ class TFModelManager:
                 f"Model size mismatch: expected {tf_model_bytesize} bytes, got {len(_decoded_model)} bytes"
             )
 
-        # Load the model
-        self._model = self._tf.lite.Interpreter(model_content=_decoded_model)
-        self._model.allocate_tensors()
+        # Create a temporary file .keras and write the model to it.
+        with tempfile.NamedTemporaryFile(suffix=".keras") as temp:
+            temp.write(_decoded_model)
+            temp.flush()
 
-        # Get input and output tensors.
-        self._input_details = self._model.get_input_details()
-        self._output_details = self._model.get_output_details()
+            # Load the model from the temporary file
+            self._model = self._tf.keras.models.load_model(temp.name)
 
 
     def predict(self, input_data):
@@ -57,18 +58,9 @@ class TFModelManager:
         # Preprocess the input
         input_data = self._preprocess_input(input_data)
 
-        # Add batch dimension if the model expects it
-        input_data = self._np.expand_dims(input_data, axis=0).astype(self._input_details[0]['dtype'])   
+        # Run the model and get the output
+        output_data = self._model.predict(input_data)
 
-        # Set the value for the model's input
-        self._model.set_tensor(self._input_details[0]['index'], input_data)
-
-        # Run the model
-        self._model.invoke()
-
-        # Extract the output data from the tensor
-        output_data = self._model.get_tensor(self._output_details[0]['index'])
-        
         # Postprocess the output
         return self._postprocess_output(output_data)
 
@@ -76,21 +68,17 @@ class TFModelManager:
         """
         Preprocesses the input data before feeding it to the model.
         """
+        # Convert input_data to a numpy array and reshape it
+        # to add the batch dimension if needed
 
-        # Check if the model requires quantized input
-        if self._input_details[0]['dtype'] == self._np.uint8:
-            # Quantize the input
-            scale, zero_point = self._input_details[0]['quantization']
-            input_data = input_data / scale + zero_point
-            #input_data = self._np.clip(input_data, 0, 256)
-            return input_data
-
+        input_data = self._np.array(input_data, dtype=self._np.float32)
+        input_data = input_data.reshape(1, *input_data.shape)
         return input_data
-
 
     def _postprocess_output(self, output_data):
         """
         Postprocesses the output data after getting it from the model.
         """
-
+        # The post-processing step might change depending on the model and application
+        # For now, just returning the output data directly
         return self._np.argmax(output_data)

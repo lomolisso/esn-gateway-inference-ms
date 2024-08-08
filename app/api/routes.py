@@ -1,6 +1,7 @@
 import logging
 import httpx
 import redis
+
 from fastapi import APIRouter, status
 from app.api import schemas
 from app.tasks.celery_app import update_tf_model_task, compute_prediction_task, get_prediction_queue_size
@@ -12,6 +13,10 @@ logger = logging.getLogger(__name__)
 redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB_HISTORY)
 
 # --- Inference endpoints ---
+@router.get("/queue-size")
+async def get_queue_size():
+    return {"queue_size": get_prediction_queue_size()}
+
 
 @router.post("/model/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_model(predictive_model: schemas.GatewayModel):
@@ -73,19 +78,22 @@ async def prediction_result(task_result: schemas.CeleryTaskResult):
     low_battery: bool = prediction_request.low_battery
     prediction: int = prediction_result.prediction
 
-    heuristic_result = utils.gateway_adaptive_inference_heuristic(
-        redis_client=redis_client,
-        gateway_name=gateway_name,
-        sensor_name=sensor_name,
-        inf_queue_size=get_prediction_queue_size(),
-        low_battery=low_battery,
-        prediction=prediction
-    ) if ADAPTIVE_INFERENCE else None
+    heuristic_result = None
+    if ADAPTIVE_INFERENCE:
+        heuristic_result = utils.gateway_adaptive_inference_heuristic(
+            redis_client=redis_client,
+            gateway_name=gateway_name,
+            sensor_name=sensor_name,
+            inf_queue_size=get_prediction_queue_size(),
+            low_battery=low_battery,
+            prediction=prediction
+        )
 
     if heuristic_result is not None and heuristic_result != GATEWAY_INFERENCE_LAYER:
         layers = {0: "SENSOR_INFERENCE_LAYER", 1: "GATEWAY_INFERENCE_LAYER", 2: "CLOUD_INFERENCE_LAYER", -1: "ERROR"}
         if heuristic_result is None:
             print("ERROR: Heuristic returned None")
+          
         print(f"{sensor_name} inference layer transitioned to {layers[heuristic_result]}")
         utils.clear_prediction_history(redis_client, gateway_name, sensor_name)
         utils.clear_prediction_counter(redis_client, gateway_name, sensor_name)

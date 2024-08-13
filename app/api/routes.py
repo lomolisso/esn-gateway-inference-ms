@@ -1,22 +1,16 @@
 import logging
-import httpx
-import redis
-
 from fastapi import APIRouter, status
-from app.api import schemas
-from app.tasks.celery_app import update_tf_model_task, compute_prediction_task, get_prediction_queue_size
-from app.core.config import CELERY_NUM_WORKERS, REDIS_HOST, REDIS_PORT, REDIS_DB_HISTORY, GATEWAY_API_URL, GATEWAY_INFERENCE_LAYER, ADAPTIVE_INFERENCE
+
 from app import utils
+from app.api import schemas
+from celery.result import AsyncResult
+from app.tasks.celery_app import update_tf_model_task, compute_prediction_task
+from app.core.config import CELERY_NUM_WORKERS, GATEWAY_INFERENCE_LAYER, ADAPTIVE_INFERENCE
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB_HISTORY)
 
 # --- Inference endpoints ---
-@router.get("/queue-size")
-async def get_queue_size():
-    return {"queue_size": get_prediction_queue_size()}
-
 
 @router.post("/model/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_model(predictive_model: schemas.GatewayModel):
@@ -29,7 +23,6 @@ async def upload_model(predictive_model: schemas.GatewayModel):
     through a specialized queues "model_queue_{i}" where i is the worker number.
     """
 
-
     worker_queues = [f"model_queue_{i+1}" for i in range(CELERY_NUM_WORKERS)]
     for k, queue in enumerate(worker_queues, start=1):
         update_tf_model_task.apply_async(
@@ -41,7 +34,7 @@ async def upload_model(predictive_model: schemas.GatewayModel):
     return {"message": "Model update broadcasted"}
 
 @router.put("/model/prediction/request", status_code=status.HTTP_202_ACCEPTED)
-async def prediction_request(prediction_request: schemas.PredictionRequestExport):
+async def prediction_request(prediction_request: schemas.SensorDataExport):
     """
     /model/prediction/request endpoint
 
@@ -51,66 +44,56 @@ async def prediction_request(prediction_request: schemas.PredictionRequestExport
     is then submitted to a specialized queue "prediction_queue" for processing.
     """
 
-    print(f"Received prediction request")
-    compute_prediction_task.apply_async(
+    task = compute_prediction_task.apply_async(
         kwargs={"request": prediction_request.model_dump()},
         queue="prediction_queue"
     )
-    return {"message": "Prediction request received, task submitted to queue: prediction_queue"}
+    return {
+        "message": "Prediction request received, task submitted to queue: prediction_queue",
+        "task_id": task.id
+    }
 
-@router.put("/model/prediction/result", status_code=status.HTTP_200_OK)
-async def prediction_result(task_result: schemas.CeleryTaskResult):
+@router.get("/model/prediction/result/{task_id}", status_code=status.HTTP_200_OK)
+async def get_prediction_result(task_id: str):
     """
-    /model/prediction/result endpoint
+    /model/prediction/result/{task_id} endpoint
 
-    This endpoint is used to receive a prediction result from the celery worker. The result comes as
-    a pydantic model object composed of the reading UUID, the inference layer, the prediction result.
-    Before sending the result to the API, the server adds the result from the gateway adaptive heuristic
-    to the model object.
+    This endpoint is used to retrieve the result of a prediction request. The task_id is used
+    to query the celery worker for the result of the prediction request. The result is then
+    returned to the client as a pydantic model object composed of the reading UUID, the inference
+    layer, the prediction result and the heuristic result.
     """
 
-    gateway_name = task_result.metadata.gateway_name
-    sensor_name = task_result.metadata.sensor_name
+    task_result = AsyncResult(task_id)
 
-    prediction_request: schemas.PredictionRequest = task_result.request
-    prediction_result: schemas.PredictionResult = task_result.result
+    if not task_result.ready():
+        return schemas.TaskResult(status="PENDING")
+    elif task_result.ready() and task_result.failed():
+        return schemas.TaskResult(status="FAILURE")
+    else:
+        prediction_task_result = schemas.PredictionResult(**task_result.result)
+        gateway_name = prediction_task_result.gateway_name
+        sensor_name = prediction_task_result.sensor_name
 
-    low_battery: bool = prediction_request.low_battery
-    prediction: int = prediction_result.prediction
+        prediction_result = prediction_task_result.prediction
+        heuristic_result = None
+        if ADAPTIVE_INFERENCE:
+            heuristic_result = utils.gateway_adaptive_inference_heuristic(
+                prediction_result=prediction_task_result,
+            )
+            if heuristic_result is not None and heuristic_result != GATEWAY_INFERENCE_LAYER:
+                layers = {0: "SENSOR_INFERENCE_LAYER", 1: "GATEWAY_INFERENCE_LAYER", 2: "CLOUD_INFERENCE_LAYER", -1: "ERROR"}
+                if heuristic_result is None:
+                    print("ERROR: Heuristic returned None")
+                
+                print(f"{sensor_name} inference layer transitioned to {layers[heuristic_result]}")
+                utils.clear_prediction_history(gateway_name, sensor_name)
+                utils.clear_prediction_counter(gateway_name, sensor_name)
 
-    heuristic_result = None
-    if ADAPTIVE_INFERENCE:
-        heuristic_result = utils.gateway_adaptive_inference_heuristic(
-            redis_client=redis_client,
-            gateway_name=gateway_name,
-            sensor_name=sensor_name,
-            inf_queue_size=get_prediction_queue_size(),
-            low_battery=low_battery,
-            prediction=prediction
-        )
-
-    if heuristic_result is not None and heuristic_result != GATEWAY_INFERENCE_LAYER:
-        layers = {0: "SENSOR_INFERENCE_LAYER", 1: "GATEWAY_INFERENCE_LAYER", 2: "CLOUD_INFERENCE_LAYER", -1: "ERROR"}
-        if heuristic_result is None:
-            print("ERROR: Heuristic returned None")
-          
-        print(f"{sensor_name} inference layer transitioned to {layers[heuristic_result]}")
-        utils.clear_prediction_history(redis_client, gateway_name, sensor_name)
-        utils.clear_prediction_counter(redis_client, gateway_name, sensor_name)
-
-    export_prediction_result = schemas.PredictionResultExport(
-        metadata=task_result.metadata,
-        export_value=schemas.PredictionResult(
-            reading_uuid=prediction_result.reading_uuid,
-            send_timestamp=prediction_result.send_timestamp,
-            inference_layer=prediction_result.inference_layer,
-            prediction=prediction,
-            heuristic_result=heuristic_result
-        )
-    )
-
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{GATEWAY_API_URL}/export/prediction-result",
-            json=export_prediction_result.model_dump()
+        return schemas.TaskResult(
+            status="SUCCESS",
+            result=schemas.TaskResultPayload(
+                prediction_result=prediction_result,
+                heuristic_result=heuristic_result
+            )
         )

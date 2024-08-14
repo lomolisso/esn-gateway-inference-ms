@@ -8,4 +8,4 @@ RUN pip install -r /tmp/requirements.app
 # run backend app
 WORKDIR /app
 EXPOSE $INFERENCE_MICROSERVICE_PORT
-CMD uvicorn app.main:app --host 0.0.0.0 --port $INFERENCE_MICROSERVICE_PORT --reload
+CMD uvicorn app.main:app --host 0.0.0.0 --port $INFERENCE_MICROSERVICE_PORT --workers 5
